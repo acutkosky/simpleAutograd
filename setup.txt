@@ -1,0 +1,4 @@
+pyenv virtualenv 3.8.5 autograd3.8.5
+pyenv local autograd3.5.8
+pip install --upgrade pip
+pip install numpy
