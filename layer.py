@@ -6,8 +6,54 @@ import numpy as np
 
 
 class Layer:
-    '''Base class for layers.'''
+    '''A layer in a network.
 
+    A layer is simply a function from R^n to R^d for some specified n and d.
+    A neural network can usually be written as a sequence of layers:
+    if the original input x is in R^d, a 3 layer neural network might be:
+
+    L3(L2(L1(x)))
+
+    We can also view the loss function as itself a layer, so that the loss
+    of the network is:
+
+    Loss(L3(L2(L1(x))))
+
+    This class is a base class used to represent different kinds of layer
+    functions. We will eventually specify a neural network and its loss function
+    with a list:
+
+    [L1, L2, L3, Loss]
+
+    where L1, L2, L3, Loss are all Layer objects.
+
+    Each Layer object implements a function called 'forward'. forward simply
+    computes the output of a layer given its input. So instead of
+    Loss(L3(L2(L1(x))), we write
+    Loss.forward(L3.forward(L2.forward(L1.forward(x)))).
+    Doing this computation finishes the forward pass of backprop.
+
+    Each layer also implements a function called 'backward'. Backward is
+    responsible for the backward pass of backprop. After we have computed the
+    forward pass, we compute
+    L1.backward(L2.backward(L3.backward(Loss.backward(1))))
+    We give 1 as the input to Loss.backward because backward is implementing
+    the chain rule - it multiplies gradients together and so giving 1 as an
+    input makes the multiplication an identity operation.
+
+    The outputs of backward are a little subtle. Some layers may have a
+    parameter that specifies the function being computed by the layer. For
+    example, a Linear layer maintains a weight matrix, so that
+    Linear(x) = xW
+    for some matrix W.
+    The input to backward should be the gradient of the final loss with respect
+    to the output of the current layer. The output of backprop should be the
+    gradient of the final loss with respect to the input of the current layer,
+    which is just the output of the previous layer. This is why it is correct
+    to chain the outputs of backprop together. However, backward should ALSO
+    compute the gradient of the loss with respect to the current layer's
+    parameter and store this internally to be used in training.
+    '''
     def __init__(self, parameter=None, name=None):
         self.name = name
         self.forward_called = False
@@ -49,6 +95,9 @@ class Layer:
             the return value should be dF(x,w)/dx * downstream_grad. Here,
             x is in R^n, F(x, w) is in R^m, dF(x, w)/dx is a matrix in R^(n x m)
             downstream_grad is in R^m and * indicates matrix multiplication.
+
+        We should also compute the gradient with respect to the parameter w.
+        Again by chain rule, this is dF(x, w)/dw * downstream_grad
         '''
         raise NotImplementedError
 
