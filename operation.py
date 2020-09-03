@@ -1,6 +1,6 @@
 
 
-class Operation(Object):
+class Operation(object):
     '''Base class for operations'''
 
     def __init__(self, name):
@@ -8,7 +8,6 @@ class Operation(Object):
         self.inputs = []
         self.forward_called = False
 
-    def zero_grad()
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
@@ -26,7 +25,7 @@ class Operation(Object):
 
         self.backward_call(downstream_grad)
 
-        for input in inputs:
+        for input in self.inputs:
             input.backward()
 
     def backward_call(self, downstream_grad):
@@ -60,7 +59,7 @@ class Operation(Object):
                 of input_grad, so that dF/dx_i(x_1,..,x_n) * downstream_grad has
                 dimension n.
         '''
-            raise NotImplementedError
+        raise NotImplementedError
 
         def forward_call(self, *args, **kwargs):
             '''forward pass. Should compute operation and save relevant state

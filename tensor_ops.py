@@ -4,34 +4,45 @@ import functools
 from variable import Variable
 from operation import Operation
 
-def all_but_i(i, excludee):
-    '''excludes the ith element from list excludee'''
-    return [item for j, item in enumerate(excludee) if j!=i]
+def all_but_i(i, exclude_from):
+    '''excludes the ith element from list exclude_from'''
+    return [item for j, item in enumerate(exclude_from) if j!=i]
 
 class EinSum(Operation):
     '''differentiable einsum operation.
         only supports explicit mode einsum (i.e. with ->), and does not support
         ellipses broadcasting.'''
-    def __init__(self):
-        super(EinSum, self).__init__(name="EinSum")
-
-    def forward_call(self, subscripts, *operands):
-        answer = Variable(data=np.einsum(subscripts, [operand.data for operand in operands]), parent=self)
+    def __init__(self, subscripts, name="EinSum"):
+        super(EinSum, self).__init__(name=name)
         self.subscripts = subscripts
+
+    def forward_call(self, *operands):
+        print(operands)
+        answer = Variable(data=np.einsum(self.subscripts, *[operand.data for operand in operands]), parent=self)
         self.inputs = operands
 
         return answer
 
     def backward_call(self, downstream_grad):
         input_subscripts, output_subscript = self.subscripts.split('->')
-        input_subscipts = input_subscripts.split(',')
+        output_subscript = output_subscript.strip()
+        # if output_subscript == '':
+        #     output_subscript = 'i'
+        input_subscripts = input_subscripts.split(',')
+        print('inp: ', input_subscripts, ' output: ',[output_subscript])
         for i, operand in enumerate(self.inputs):
-            other_subscripts = all_but_i(i, input_subcripts)
-            other_subscripts.append(output_subscript)
+            other_subscripts = all_but_i(i, input_subscripts)
             subscript_string = ','.join(other_subscripts)
+            operands_for_grad = [input.data for input in all_but_i(i, self.inputs)]
+            if output_subscript != '':
+                operands_for_grad += [downstream_grad]
+                subscript_string += ',' + output_subscript
             subscript_string += '->' + input_subscripts[i]
-            grad_inputs = subscript
-            operand.grad = np.einsum(subscript_string, [input.data for input in all_but_i(i, self.inputs)] + [downstream_grad])
+            print("subscripts: ",subscript_string," ops: ",operands_for_grad)
+            operand.grad = np.einsum(subscript_string, *operands_for_grad)
+            if output_subscript == '':
+                print('operand.grad: ', operand.grad, ' downstream: ', downstream_grad)
+                operand.grad *= downstream_grad
 
 
 class TensorContract(Operation):
@@ -105,10 +116,10 @@ class TensorMultiply(Operation):
 
         # gradient of abcd with respect to b is acd
         upstream_grads = []
-        for i, range(len(self.state['inputs']))
+        for i in range(len(self.state['inputs'])):
             #set 0s to 1 to avoid divide by zero errors.
             product = downstream_grad
-            for j, input in enumerate(self.state['inputs'])
+            for j, input in enumerate(self.state['inputs']):
                 if i!=j:
                     product = product * input
             upstream_grads.append(product)
