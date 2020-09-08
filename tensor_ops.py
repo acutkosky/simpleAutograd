@@ -27,11 +27,8 @@ def einsum_subscripts_ops(ops, subscripts, subscriptout, output_shape):
             list that do not show up in the input subscripts.
         output_shape: shape of output array.
     '''
-
     #remove excess indices from subscriptout
-    index_set = set([])
-    for subscript in subscripts:
-        index_set.update(subscript)
+    index_set = set([index for subscript in subscripts for index in subscript])
 
     dimensions = {}
     for op, subscript in zip(ops, subscripts):
@@ -41,21 +38,29 @@ def einsum_subscripts_ops(ops, subscripts, subscriptout, output_shape):
             else:
                 dimensions[index] = max(dimensions[index], np.shape(op)[i])
 
-
+    # np.einsum only believes in output subscripts that are subsets of the
+    # input subscripts. So we need to filter out the output indices that
+    # are not present in the input, and then run einsum.
+    # The output of einsum will then be the wrong shape, so we insert extra
+    # dimensions and then broadcast back to the correct shape.
     filtered_subscriptout = [_ for _ in subscriptout if _ in index_set]
     output_prebroadcast_shape = [dimensions[_] if _ in index_set else 1 for _ in subscriptout]
     einsum_inputs = [_ for pair in zip(ops, subscripts) for _ in pair]
     einsum_inputs.append(filtered_subscriptout)
-    print("inputs: ", einsum_inputs)
-    print("subscriptout: ", subscriptout, " filtered: ",filtered_subscriptout, " output_prebroadcast_shape: ",output_prebroadcast_shape, " output shape: ",output_shape)
+
     return np.broadcast_to(np.reshape(np.einsum(*einsum_inputs), output_prebroadcast_shape), output_shape)
 
 def get_subscript_lists(subscripts):
+    '''convert list of subscript strings into a list of lists of integers.'''
     counter = 0
     chars_to_index = {}
     subscripts_lists = []
     for subscript in subscripts:
         subscript_list = []
+        if subscript == '':
+            # Special case for empty string so that einsum
+            # doesn't complain.
+            subscript_list = [0]
         for char in subscript:
             if char not in chars_to_index:
                 chars_to_index[char] = counter
@@ -73,9 +78,8 @@ class EinSum(Operation):
         self.subscripts = subscripts
 
     def forward_call(self, *operands):
-        print(operands)
         answer = Variable(data=np.einsum(self.subscripts, *[operand.data for operand in operands]), parent=self)
-        self.inputs = operands
+        self.inputs = list(operands)
 
         return answer
 
@@ -108,29 +112,11 @@ class EinSum(Operation):
         input_subscripts = input_subscripts.split(',')
         output_subscript = output_subscript.strip()
         subscript_lists = get_subscript_lists(input_subscripts + [output_subscript])
-        input_subscripts = subscript_lists[:-1]
-        output_subscript = subscript_lists[-1]
 
-        # if output_subscript == '':
-        #     output_subscript = 'i'
-        # input_subscripts = input_subscripts.split(',')
-        print('inp: ', input_subscripts, ' output: ',output_subscript)
         for i, operand in enumerate(self.inputs):
-            other_subscripts = all_but_i(i, input_subscripts)
-            # subscript_string = ','.join(other_subscripts)
-            operands_for_grad = [input.data for input in all_but_i(i, self.inputs)]
-            if output_subscript != []:#'':
-                operands_for_grad += [downstream_grad]
-                other_subscripts += [output_subscript]
-                # subscript_string += ',' + output_subscript
-            # subscript_string += '->' + input_subscripts[i]
-            print("about to einsum in backward: ",operand.data)
-            operand.grad = einsum_subscripts_ops(operands_for_grad, other_subscripts, input_subscripts[i], np.shape(operand.data))
-            # print("subscripts: ",subscript_string," ops: ",operands_for_grad)
-            # operand.grad = np.einsum(subscript_string, *operands_for_grad)
-            if output_subscript == []:#'':
-                print('operand.grad: ', operand.grad, ' downstream: ', downstream_grad)
-                operand.grad = operand.grad * downstream_grad
+            other_subscripts = all_but_i(i, subscript_lists)
+            operands_for_grad = [input.data for input in all_but_i(i, self.inputs + [downstream_grad])]
+            operand.grad = einsum_subscripts_ops(operands_for_grad, other_subscripts, subscript_lists[i], np.shape(operand.data))
 
 
 class TensorContract(Operation):
@@ -168,9 +154,9 @@ class TensorAdd(Operation):
     def forward_call(self, inputs):
         '''inputs should be a list of ndarrays, all with the same dimensions.'''
 
-        assert(len(inputs) > 0, "Add called with no inputs!")
+        assert len(inputs) > 0, "Add called with no inputs!"
         for input in inputs:
-            assert(input.shape == inputs[0].shape, "Shape mismatch in Add!")
+            assert input.shape == inputs[0].shape, "Shape mismatch in Add!"
 
         self.state['num_inputs'] = len(inputs)
 
@@ -188,9 +174,9 @@ class TensorMultiply(Operation):
     def forward_call(self, inputs):
         '''inputs should be a list of ndarrays, all with the same dimensions.'''
 
-        assert(len(inputs) > 0, "Multiply called with no inputs!")
+        assert len(inputs) > 0, "Multiply called with no inputs!"
         for input in inputs:
-            assert(input.shape == inputs[0].shape, "Shape mismatch in Multiply!")
+            assert input.shape == inputs[0].shape, "Shape mismatch in Multiply!"
 
         self.state['num_inputs'] = len(inputs)
         self.state['inputs'] = [np.copy(input) for input in inputs]
@@ -217,12 +203,12 @@ class TensorMultiply(Operation):
 def ScalarMultiply(Operation):
     '''multiplication by a scalar.'''
     def __init__(self):
-        super(TensorMultiply, self).__init__(name="Scalar Multiply")
+        super(ScalarMultiply, self).__init__(name="Scalar Multiply")
 
     def forward_call(self, inputs):
         '''inputs[0] is a scalar, inputs[1] is an ndarray.'''
 
-        assert(len(inputs) !=2, " Scalar multiply not called with 2 inputs!")
+        assert len(inputs) !=2, " Scalar multiply not called with 2 inputs!"
 
         self.state['scalar'] = inputs[0]
         self.state['tensor'] = np.copy(input[1])
@@ -243,6 +229,7 @@ def ScalarMultiply(Operation):
         return upstream_grads
 
 
-def MatrixMultiply(Operation):
+def MatrixMultiply(EinSum):
     def __init__(self):
-        super(MatrixMultiply, self).__init__(name="Matrix Multiply")
+        super(MatrixMultiply, self).__init__("ij,jk->ik", name="Matrix Multiply")
+

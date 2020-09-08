@@ -53,7 +53,7 @@ def test_operation_random(input_shapes, output_shape, operation_fn):
     print("inputs: ", inputs)
     print("downstream grad: ", downstream_grad)
     print("numeric: ", numeric)
-    print("analutic: ", analytic)
+    print("analytic: ", analytic)
     return diff
 
 
