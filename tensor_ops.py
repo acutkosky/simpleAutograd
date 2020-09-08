@@ -8,6 +8,62 @@ def all_but_i(i, exclude_from):
     '''excludes the ith element from list exclude_from'''
     return [item for j, item in enumerate(exclude_from) if j!=i]
 
+
+def einsum_subscripts_ops(ops, subscripts, subscriptout, output_shape):
+    '''
+    wrapper around np.einsum that takes inputs in a different order
+    and allows us to specify the output_shape.
+
+    args:
+        ops: list of numpy arrays
+        subscripts: list of subscript indices. Each element is a list of
+            integers. len(subscripts[i]) = len(np.shape(ops[i])).
+            The i^th element is the subscript string corresponding to
+            ops[i] in np.einsum.
+        subscriptout: list of integers corresponding to subscripts for the
+            output, len(subscriptout) should be the number of dimensions
+            in the output.
+            Note that *unlike np.einsum*, it is ok to have values in this
+            list that do not show up in the input subscripts.
+        output_shape: shape of output array.
+    '''
+
+    #remove excess indices from subscriptout
+    index_set = set([])
+    for subscript in subscripts:
+        index_set.update(subscript)
+
+    dimensions = {}
+    for op, subscript in zip(ops, subscripts):
+        for i, index in enumerate(subscript):
+            if index not in dimensions:
+                dimensions[index] = np.shape(op)[i]
+            else:
+                dimensions[index] = max(dimensions[index], np.shape(op)[i])
+
+
+    filtered_subscriptout = [_ for _ in subscriptout if _ in index_set]
+    output_prebroadcast_shape = [dimensions[_] if _ in index_set else 1 for _ in subscriptout]
+    einsum_inputs = [_ for pair in zip(ops, subscripts) for _ in pair]
+    einsum_inputs.append(filtered_subscriptout)
+    print("inputs: ", einsum_inputs)
+    print("subscriptout: ", subscriptout, " filtered: ",filtered_subscriptout, " output_prebroadcast_shape: ",output_prebroadcast_shape, " output shape: ",output_shape)
+    return np.broadcast_to(np.reshape(np.einsum(*einsum_inputs), output_prebroadcast_shape), output_shape)
+
+def get_subscript_lists(subscripts):
+    counter = 0
+    chars_to_index = {}
+    subscripts_lists = []
+    for subscript in subscripts:
+        subscript_list = []
+        for char in subscript:
+            if char not in chars_to_index:
+                chars_to_index[char] = counter
+                counter += 1
+            subscript_list.append(chars_to_index[char])
+        subscripts_lists.append(subscript_list)
+    return subscripts_lists
+
 class EinSum(Operation):
     '''differentiable einsum operation.
         only supports explicit mode einsum (i.e. with ->), and does not support
@@ -24,25 +80,57 @@ class EinSum(Operation):
         return answer
 
     def backward_call(self, downstream_grad):
+        '''backwards operation for einsum
+
+        Most of the time, the derivative can be expressed as another einsum.
+        If we differentiate with respect to the first argument, and the input
+        is 
+        I1, I2,...,In -> J
+        where I1, I2, etc are subscript strings and J is the subscript string
+        of the output, then as long as
+        1. J has rank > 1
+        2. all indices in I1 show up in the other I's or in J
+        then the derivative is
+        J, I2,..., In -> I1
+
+        If 1 is false, then the derivative is just given by multiplying the 
+        scalar downstream_grad by:
+        I2,...,In -> I1
+        
+        if 2 is false, then if we let I1' be the indices that are in common,
+        we compute 
+        J,I2,...,In -> I1'
+        and then we need to broadcast I1' to the correct shape I1.
+
+        '''
+
         input_subscripts, output_subscript = self.subscripts.split('->')
+        input_subscripts = input_subscripts.split(',')
         output_subscript = output_subscript.strip()
+        subscript_lists = get_subscript_lists(input_subscripts + [output_subscript])
+        input_subscripts = subscript_lists[:-1]
+        output_subscript = subscript_lists[-1]
+
         # if output_subscript == '':
         #     output_subscript = 'i'
-        input_subscripts = input_subscripts.split(',')
-        print('inp: ', input_subscripts, ' output: ',[output_subscript])
+        # input_subscripts = input_subscripts.split(',')
+        print('inp: ', input_subscripts, ' output: ',output_subscript)
         for i, operand in enumerate(self.inputs):
             other_subscripts = all_but_i(i, input_subscripts)
-            subscript_string = ','.join(other_subscripts)
+            # subscript_string = ','.join(other_subscripts)
             operands_for_grad = [input.data for input in all_but_i(i, self.inputs)]
-            if output_subscript != '':
+            if output_subscript != []:#'':
                 operands_for_grad += [downstream_grad]
-                subscript_string += ',' + output_subscript
-            subscript_string += '->' + input_subscripts[i]
-            print("subscripts: ",subscript_string," ops: ",operands_for_grad)
-            operand.grad = np.einsum(subscript_string, *operands_for_grad)
-            if output_subscript == '':
+                other_subscripts += [output_subscript]
+                # subscript_string += ',' + output_subscript
+            # subscript_string += '->' + input_subscripts[i]
+            print("about to einsum in backward: ",operand.data)
+            operand.grad = einsum_subscripts_ops(operands_for_grad, other_subscripts, input_subscripts[i], np.shape(operand.data))
+            # print("subscripts: ",subscript_string," ops: ",operands_for_grad)
+            # operand.grad = np.einsum(subscript_string, *operands_for_grad)
+            if output_subscript == []:#'':
                 print('operand.grad: ', operand.grad, ' downstream: ', downstream_grad)
-                operand.grad *= downstream_grad
+                operand.grad = operand.grad * downstream_grad
 
 
 class TensorContract(Operation):

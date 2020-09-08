@@ -57,9 +57,9 @@ def test_operation_random(input_shapes, output_shape, operation_fn):
     return diff
 
 
-operation_fn = lambda inputs: EinSum('i,j,k->').forward(*inputs)
-input_shapes = [(3),(3), (1)]
-output_shape = (3, 3)
+operation_fn = lambda inputs: EinSum('i,j,k->i').forward(*inputs)
+input_shapes = [(3),(3), (2)]
+output_shape = (3)
 
 diff = test_operation_random(input_shapes, output_shape, operation_fn)
 
