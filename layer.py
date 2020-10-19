@@ -130,14 +130,14 @@ class Bias(Layer):
     '''adds a constant bias.'''
 
     def __init__(self, bias, name="bias"):
-        super(Bias, self).__init__(bias, name)
+        super(Bias, self).__init__(np.squeeze(bias), name)
 
     def forward(self, input):
         self.input = input
         return self.parameter + self.input
 
     def backward(self, downstream_grad):
-        self.grad = np.sum(downstream_grad)
+        self.grad = np.sum(downstream_grad, tuple(range(downstream_grad.ndim - self.parameter.ndim)))
         return downstream_grad
 
 class ReLU(Layer):
@@ -178,19 +178,45 @@ class SoftMax(Layer):
         '''input is BxN array, B is batch dimension.'''
         self.input = input
 
-        self.exponents = np.exp(input)
-        self.normalization_constant = np.sum(self.exponents, axis=1)
+        exponents = np.exp(input)
+        normalization_constant = 1.0/np.sum(exponents, axis=1)
+        self.probabilities = np.einsum('bn,b->bn', exponents, normalization_constant)
 
-        return (self.exponents.T / self.normalization_constant).T
+        return self.probabilities
 
     def backward(self, downstream_grad):
         '''downstream grad should be BxN array.'''
-        #The gradient expression is depressingly complicated... maybe someone
-        #better at vectorizing could do something nicer.
-        return ((self.exponents * downstream_grad).T / self.normalization_constant).T \
-            - (np.einsum('ij,ji,ik->ki', downstream_grad, self.exponents.T,
-                         self.exponents) / self.normalization_constant**2).T
+        # Let S be the BxN matrix of probabilities.
+        # The derivative tensor T is BxN x BxN.
+        # T[b,n] is a matrix whose k,l th component is
+        # T[b,n, k,l] = dS[k,l]/dX[b,n]
+        # where X is the input. Notice that for k!=b, T[b,n,k,l] is zero.
+        # If downstream grad is D, then we need to return the contraction of
+        # T and D. If this return value is R (a BxN matrix), we have
+        # R[b,n] = sum_{k,l} T[b,n, k, l] D[k,l]
+        # Instead of computing T, we will compute a BxNxN tensor A such that
+        # T[b,n,b,l] = A[b,n,l]
+        # since T[b,n,k,l]=0 for b!=k, A contains all the information in T, and:
+        # R[b,n] = sum_l A[b,n,l] D[b,l]. In einsum notation:
+        # R = np.einsum('bnl, bl->bn', A, D)
 
+        # Taking derivatives, we can observe:
+        # dS[b,l]/dX[b,n] = -S[b,l]*S[b,n] + S[b,l]*I[n,l]
+        # where I is the NxN identity matrix. Therefore,
+        # A[b,n,l] = dS[b,l]/dX[b,n] = -S[b,l]*S[b,n] + S[b,l]*I[n,l]
+        # To compute A, we write
+        # A[b,n,l] = P[b,n,l] + Q[b,n,l]
+        # where P[b,n,l] = -S[b,l]*S[b,n] and Q[b,n,l] = S[b,l]*I[n,l]
+        # In einsum notation:
+        # P = np.einsum('bl,bn->bnl', S, S)
+        # Q = np.einsum('bl,nl,bnl', S, np.eye(N))
+        
+        B,N = np.shape(self.probabilities)
+        batched_outer_products = np.einsum('bl,bn->bnl', self.probabilities, self.probabilities)
+        batched_diags = np.einsum('bl,nl->bnl', self.probabilities, np.eye(N))
+        A = batched_diags - batched_outer_products
+        R = np.einsum('bnl, bl->bn', A, downstream_grad)
+        return R
 
 class CrossEntropy(Layer):
     '''cross entropy loss.'''
@@ -267,7 +293,7 @@ def test_autograd():
     layers = [
         Linear(np.random.normal(size=(h, 2 * h))),
         Sigmoid(),
-        Bias(np.array([np.random.normal()])),
+        Bias(np.array([np.random.normal(size=2*h)])),
         Linear(np.random.normal(size=(2 * h, 3 * h))),
         ReLU(),
         Linear(np.random.normal(size=(3 * h, h))),

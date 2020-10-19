@@ -219,7 +219,6 @@ def ScalarMultiply(Operation):
 
     def backward_call(self, downstream_grad):
 
-
         # gradient of abcd with respect to b is acd
         upstream_grads = [
             np.sum(self.state['tensor'] * downstream_grad),
