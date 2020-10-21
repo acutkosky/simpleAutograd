@@ -211,7 +211,7 @@ class SoftMax(Layer):
         # P = np.einsum('bl,bn->bnl', S, S)
         # Q = np.einsum('bl,nl,bnl', S, np.eye(N))
         
-        B,N = np.shape(self.probabilities)
+        _,N = np.shape(self.probabilities)
         batched_outer_products = np.einsum('bl,bn->bnl', self.probabilities, self.probabilities)
         batched_diags = np.einsum('bl,nl->bnl', self.probabilities, np.eye(N))
         A = batched_diags - batched_outer_products
